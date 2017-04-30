@@ -17,14 +17,18 @@ import (
 const (
 	// BGP Version (RFC4271)
 	bgpVersion byte = 4
+)
 
+const (
 	// BGP Message Types
 	bgpTypeOPEN         byte = 1
 	bgpTypeUPDATE       byte = 2
 	bgpTypeNOTIFICATION byte = 3
 	bgpTypeKEEPALIVE    byte = 4
 	bgpTypeROUTEREFRESH byte = 5
+)
 
+const (
 	// BGP States
 	bgpStateIDLE int = iota
 	bgpStateCONNECT
