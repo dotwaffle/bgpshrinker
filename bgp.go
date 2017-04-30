@@ -36,18 +36,18 @@ const (
 
 // Peer holds all the configuration for a BGP Neighbor.
 type Peer struct {
-	Host     net.IP                 // allow connections from IPv6, but at present we only support IPv4 Unicast AFI/SAFI
-	Port     uint16                 // this should default to 179
-	LocalASN uint16                 // this is only used for our OPEN message, we're acting like a route-server
-	HoldTime time.Duration          // truncated to seconds in the OPEN message
-	RouterID uint32                 // must be unique, don't care what it is
-	State    int                    // BGP FSM state, local significance only
-	Updated  time.Time              // when the last update message was received, to prevent wasted effort later
-	RIB      *critbitgo.Net         // radix tree, value is all BGP path attributes
-	Map      map[string][]net.IPNet // map of NEXT_HOP to prefixes, for fast lookups later. string because net.IP is slice
-	conn     net.Conn               // actual connection to our peer
-	msgSend  chan []byte            // messages TO the peer
-	msgRecv  chan []byte            // messages FROM the peer
+	Host        net.IP                 // allow connections from IPv6, but at present we only support IPv4 Unicast AFI/SAFI
+	Port        uint16                 // this should default to 179
+	LocalASN    uint16                 // this is only used for comparing OPEN message ASNs
+	HoldTime    time.Duration          // truncated to seconds in the OPEN message
+	RouterID    uint32                 // must be unique, don't care what it is
+	state       int                    // BGP FSM state, local significance only
+	updated     time.Time              // when the last update message was received, to prevent wasted effort later
+	rib         *critbitgo.Net         // radix tree, value is all BGP path attributes
+	mapNextHops map[string][]net.IPNet // map of NEXT_HOP to prefixes, for fast lookups later. string because net.IP is slice
+	conn        net.Conn               // actual connection to our peer
+	msgSend     chan []byte            // messages TO the peer
+	msgRecv     chan []byte            // messages FROM the peer
 }
 
 func (peer Peer) sendMsg(msgType byte, msgBody []byte) {
@@ -87,11 +87,11 @@ func (peer *Peer) Dial() error {
 	address := net.JoinHostPort(peer.Host.String(), strconv.Itoa(int(peer.Port)))
 
 	// create a tcp connection to the address -- resolve if needed, tcp4/6 as necessary
-	peer.State = bgpStateCONNECT
+	peer.state = bgpStateCONNECT
 	var err error
 	peer.conn, err = net.Dial("tcp", address)
 	if err != nil {
-		peer.State = bgpStateIDLE
+		peer.state = bgpStateIDLE
 		return errors.New("Failed to connect")
 	}
 
@@ -103,7 +103,7 @@ func (peer *Peer) Dial() error {
 			if err != nil {
 				// sleep a few seconds before restarting
 				peer.conn.Close()
-				peer.State = bgpStateIDLE
+				peer.state = bgpStateIDLE
 				return
 			}
 		}
@@ -136,7 +136,7 @@ func (peer *Peer) Dial() error {
 
 	// send the OPEN message
 	peer.sendMsg(bgpTypeOPEN, openMsg)
-	peer.State = bgpStateOPENSENT
+	peer.state = bgpStateOPENSENT
 
 	// read the open message in reply
 	// probably ignore optional parameters incl. capabilities
@@ -149,7 +149,7 @@ func (peer *Peer) Dial() error {
 			log.Printf("BAD MARKER! %v", bufOpenMarker)
 			peer.sendMsg(bgpTypeNOTIFICATION, []byte{1, 1})
 			peer.conn.Close()
-			peer.State = bgpStateIDLE
+			peer.state = bgpStateIDLE
 			return errors.New("Bad Open")
 		}
 	}
@@ -171,7 +171,7 @@ func (peer *Peer) Dial() error {
 		log.Printf("FIRST RECEIVED MESSAGE SHOULD BE OPEN!")
 		peer.sendMsg(bgpTypeNOTIFICATION, []byte{2, 0})
 		peer.conn.Close()
-		peer.State = bgpStateIDLE
+		peer.state = bgpStateIDLE
 		return errors.New("Bad Open")
 	}
 
@@ -181,18 +181,18 @@ func (peer *Peer) Dial() error {
 	if int(bufOpenVersion[0]) != 4 {
 		log.Printf("BAD VERSION! %v", bufOpenVersion)
 		peer.sendMsg(bgpTypeNOTIFICATION, []byte{2, 1})
-		peer.State = bgpStateIDLE
+		peer.state = bgpStateIDLE
 		peer.conn.Close()
 		return errors.New("Bad Version")
 	}
 
-	// check the ASN is our local ASN (iBGP TTL = 1, so remote needs to be RR Client)
+	// check the ASN is our local ASN (iBGP TTL = 1, so remote may need to be RR Client)
 	bufOpenASN := make([]byte, 2)
 	io.ReadFull(peer.conn, bufOpenASN)
 	if binary.BigEndian.Uint16(bufOpenASN) != peer.LocalASN {
 		log.Printf("BAD ASN! %v", binary.BigEndian.Uint16(bufOpenASN))
 		peer.sendMsg(bgpTypeNOTIFICATION, []byte{2, 2})
-		peer.State = bgpStateIDLE
+		peer.state = bgpStateIDLE
 		peer.conn.Close()
 		return errors.New("Bad Remote ASN")
 	}
@@ -203,7 +203,7 @@ func (peer *Peer) Dial() error {
 	if binary.BigEndian.Uint16(bufOpenHoldTime) < 3 {
 		log.Printf("BAD HOLD TIME! %v", binary.BigEndian.Uint16(bufOpenHoldTime))
 		peer.sendMsg(bgpTypeNOTIFICATION, []byte{2, 6})
-		peer.State = bgpStateIDLE
+		peer.state = bgpStateIDLE
 		peer.conn.Close()
 		return errors.New("Bad Hold Time")
 	} else if float64(binary.BigEndian.Uint16(bufOpenHoldTime)) < peer.HoldTime.Seconds() {
@@ -227,7 +227,7 @@ func (peer *Peer) Dial() error {
 	// we actually don't care, so just ignore the data
 
 	// we've got a live OPEN message...
-	peer.State = bgpStateOPENCONFIRM
+	peer.state = bgpStateOPENCONFIRM
 
 	// start KEEPALIVE goroutine, sending every (negotiated) HoldTime/3
 	go func() {
@@ -247,9 +247,9 @@ func (peer *Peer) Dial() error {
 			peer.conn.Close()
 
 			// none of our data is valid anymore clear everything out
-			peer.RIB.Clear()
-			peer.Map = make(map[string][]net.IPNet)
-			peer.State = bgpStateIDLE
+			peer.rib.Clear()
+			peer.mapNextHops = make(map[string][]net.IPNet)
+			peer.state = bgpStateIDLE
 		}
 	}()
 
@@ -308,7 +308,7 @@ func (peer *Peer) Dial() error {
 			case 2:
 				// UPDATE
 				peer.msgRecv <- bufData
-				peer.Updated = time.Now()
+				peer.updated = time.Now()
 				// RFC4271 says we can treat this as a KEEPALIVE message
 				_ = notifyTimer.Reset(peer.HoldTime)
 			case 3:
@@ -316,9 +316,9 @@ func (peer *Peer) Dial() error {
 				peer.conn.Close()
 
 				// none of our data is valid anymore clear everything out
-				peer.RIB.Clear()
-				peer.Map = make(map[string][]net.IPNet)
-				peer.State = bgpStateIDLE
+				peer.rib.Clear()
+				peer.mapNextHops = make(map[string][]net.IPNet)
+				peer.state = bgpStateIDLE
 
 				// force cleanup
 				break
@@ -334,9 +334,9 @@ func (peer *Peer) Dial() error {
 				peer.conn.Close()
 
 				// none of our data is valid anymore clear everything out
-				peer.RIB.Clear()
-				peer.Map = make(map[string][]net.IPNet)
-				peer.State = bgpStateIDLE
+				peer.rib.Clear()
+				peer.mapNextHops = make(map[string][]net.IPNet)
+				peer.state = bgpStateIDLE
 			default:
 				log.Fatal("BGP UNKNOWN MESSAGE TYPE!")
 			}
@@ -344,11 +344,11 @@ func (peer *Peer) Dial() error {
 	}()
 
 	// with a new BGP session up and ready, clear out existing RIB state if we forgot to earlier
-	peer.RIB.Clear()
-	peer.Map = make(map[string][]net.IPNet)
+	peer.rib.Clear()
+	peer.mapNextHops = make(map[string][]net.IPNet)
 
 	// Fully established on the localizer, descend with the ILS
-	peer.State = bgpStateESTABLISHED
+	peer.state = bgpStateESTABLISHED
 
 	// process UPDATE messages
 	go func() {
@@ -398,7 +398,7 @@ func (peer *Peer) Dial() error {
 
 					// withdraw prefix from RIB
 					// FIXME: returns (value interface{}, ok bool, err error) but cba right now.
-					peer.RIB.Delete(&net.IPNet{IP: prefix, Mask: net.CIDRMask(int(mask), 32)})
+					peer.rib.Delete(&net.IPNet{IP: prefix, Mask: net.CIDRMask(int(mask), 32)})
 
 					// withdraw prefix from Indexing Map
 					peer.mapDelete(net.IPNet{IP: prefix, Mask: net.CIDRMask(int(mask), 32)})
@@ -499,7 +499,7 @@ func (peer *Peer) Dial() error {
 					}
 
 					// add prefix to RIB
-					peer.RIB.Add(&net.IPNet{IP: prefix, Mask: net.CIDRMask(int(mask), 32)}, pathInfo)
+					peer.rib.Add(&net.IPNet{IP: prefix, Mask: net.CIDRMask(int(mask), 32)}, pathInfo)
 
 					// add prefix to Indexing map
 					peer.mapAdd(net.IPNet{IP: prefix, Mask: net.CIDRMask(int(mask), 32)}, pathNextHop)
@@ -518,16 +518,16 @@ func (peer *Peer) Dial() error {
 }
 
 func (peer Peer) mapAdd(prefix net.IPNet, nextHop net.IP) {
-	peer.Map[nextHop.String()] = append(peer.Map[nextHop.String()], prefix)
+	peer.mapNextHops[nextHop.String()] = append(peer.mapNextHops[nextHop.String()], prefix)
 }
 
 func (peer Peer) mapDelete(item net.IPNet) {
 	// we've got to iterate over all the keys to find that prefix...
 OuterLoop:
-	for nextHop, prefixes := range peer.Map {
+	for nextHop, prefixes := range peer.mapNextHops {
 		for index, prefix := range prefixes {
 			if reflect.DeepEqual(prefix, item) {
-				peer.Map[nextHop] = append(peer.Map[nextHop][:index], peer.Map[nextHop][index+1:]...)
+				peer.mapNextHops[nextHop] = append(peer.mapNextHops[nextHop][:index], peer.mapNextHops[nextHop][index+1:]...)
 				break OuterLoop
 			}
 		}
@@ -537,7 +537,7 @@ OuterLoop:
 // Withdraw will send a prefix withdrawal over a BGP session
 func (peer Peer) Withdraw(prefix net.IPNet) error {
 	// can't send if it's not up!
-	if peer.State != bgpStateESTABLISHED {
+	if peer.state != bgpStateESTABLISHED {
 		return errors.New("Prefix withdrawal not possible, BGP session is down")
 	}
 
@@ -575,7 +575,7 @@ func (peer Peer) Withdraw(prefix net.IPNet) error {
 // Announce will send a prefix announcement over a BGP session
 func (peer Peer) Announce(prefix net.IPNet, nextHop net.IP) error {
 	// can't send if it's not up!
-	if peer.State != bgpStateESTABLISHED {
+	if peer.state != bgpStateESTABLISHED {
 		return errors.New("Prefix announcement not possible, BGP session is down")
 	}
 

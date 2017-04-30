@@ -2,7 +2,7 @@ package main
 
 import "reflect"
 
-func compare(new, old []nlri) []change {
+func diffSets(new, old []nlri) []change {
 	var changes []change
 	for _, testNew := range new {
 		// are we going to add the prefix? yes, unless we find evidence it's already present
