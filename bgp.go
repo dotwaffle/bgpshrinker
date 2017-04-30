@@ -149,7 +149,7 @@ func (peer *Peer) Dial() error {
 	io.ReadFull(peer.conn, bufOpenMarker)
 	for _, m := range bufOpenMarker {
 		if m != 255 {
-			log.Printf("BAD MARKER! %v", bufOpenMarker)
+			log.Errorf("BAD MARKER! %v", bufOpenMarker)
 			peer.sendMsg(bgpTypeNOTIFICATION, []byte{1, 1})
 			peer.conn.Close()
 			peer.state = bgpStateIDLE
@@ -171,7 +171,7 @@ func (peer *Peer) Dial() error {
 	bufOpenType := make([]byte, 1)
 	io.ReadFull(peer.conn, bufOpenType)
 	if int(bufOpenType[0]) != 1 {
-		log.Printf("FIRST RECEIVED MESSAGE SHOULD BE OPEN!")
+		log.Errorf("FIRST RECEIVED MESSAGE SHOULD BE OPEN!")
 		peer.sendMsg(bgpTypeNOTIFICATION, []byte{2, 0})
 		peer.conn.Close()
 		peer.state = bgpStateIDLE
@@ -182,7 +182,7 @@ func (peer *Peer) Dial() error {
 	bufOpenVersion := make([]byte, 1)
 	io.ReadFull(peer.conn, bufOpenVersion)
 	if int(bufOpenVersion[0]) != 4 {
-		log.Printf("BAD VERSION! %v", bufOpenVersion)
+		log.Errorf("BAD VERSION! %v", bufOpenVersion)
 		peer.sendMsg(bgpTypeNOTIFICATION, []byte{2, 1})
 		peer.state = bgpStateIDLE
 		peer.conn.Close()
@@ -193,7 +193,7 @@ func (peer *Peer) Dial() error {
 	bufOpenASN := make([]byte, 2)
 	io.ReadFull(peer.conn, bufOpenASN)
 	if binary.BigEndian.Uint16(bufOpenASN) != peer.ASN {
-		log.Printf("BAD ASN! %v", binary.BigEndian.Uint16(bufOpenASN))
+		log.Errorf("BAD ASN! %v", binary.BigEndian.Uint16(bufOpenASN))
 		peer.sendMsg(bgpTypeNOTIFICATION, []byte{2, 2})
 		peer.state = bgpStateIDLE
 		peer.conn.Close()
@@ -204,7 +204,7 @@ func (peer *Peer) Dial() error {
 	bufOpenHoldTime := make([]byte, 2)
 	io.ReadFull(peer.conn, bufOpenHoldTime)
 	if binary.BigEndian.Uint16(bufOpenHoldTime) < 3 {
-		log.Printf("BAD HOLD TIME! %v", binary.BigEndian.Uint16(bufOpenHoldTime))
+		log.Errorf("BAD HOLD TIME! %v", binary.BigEndian.Uint16(bufOpenHoldTime))
 		peer.sendMsg(bgpTypeNOTIFICATION, []byte{2, 6})
 		peer.state = bgpStateIDLE
 		peer.conn.Close()

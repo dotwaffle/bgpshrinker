@@ -79,6 +79,7 @@ func main() {
 	go func(peer *Peer) {
 		for {
 			if peer.state == bgpStateIDLE {
+				log.Debug("Dialling Input")
 				peer.Dial()
 			}
 
@@ -91,6 +92,7 @@ func main() {
 	go func(peer *Peer) {
 		for {
 			if peer.state == bgpStateIDLE {
+				log.Debug("Dialling Output")
 				peer.Dial()
 			}
 
