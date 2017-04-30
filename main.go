@@ -6,7 +6,7 @@ import (
 	"net"
 	"time"
 
-	yaml "gopkg.in/yaml.v1"
+	yaml "gopkg.in/yaml.v2"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/k-sone/critbitgo"
@@ -34,7 +34,8 @@ type Configuration struct {
 }
 
 var (
-	configFile = flag.String("config", "bgpshrinker.conf", "Path to configuration file")
+	configFileInput  = flag.String("config-input", "bgpshrinker.input.conf", "Path to configuration file for input session")
+	configFileOutput = flag.String("config-output", "bgpshrinker.output.conf", "Path to configuration file for output session")
 )
 
 func main() {
@@ -44,13 +45,22 @@ func main() {
 	// Read Flags
 	flag.Parse()
 
-	// Read Configuration File
-	configuration := Configuration{}
-	rawConfig, err := ioutil.ReadFile(*configFile)
+	// Read Configuration Files
+	var peerInput Peer
+	rawConfigInput, err := ioutil.ReadFile(*configFileInput)
 	if err != nil {
 		log.Fatalf("Could not read config file, err: %v", err)
 	}
-	if err := yaml.Unmarshal(rawConfig, &configuration); err != nil {
+	if err := yaml.Unmarshal(rawConfigInput, &peerInput); err != nil {
+		log.Fatalf("Could not parse JSON/YAML inside config file, err: %v", err)
+	}
+
+	var peerOutput Peer
+	rawConfigOutput, err := ioutil.ReadFile(*configFileOutput)
+	if err != nil {
+		log.Fatalf("Could not read config file, err: %v", err)
+	}
+	if err := yaml.Unmarshal(rawConfigOutput, &peerOutput); err != nil {
 		log.Fatalf("Could not parse JSON/YAML inside config file, err: %v", err)
 	}
 
@@ -58,12 +68,10 @@ func main() {
 	lastUpdate := time.Now()
 
 	// Create a BGP session for the full table input
-	peerInput := configuration.Input
 	peerInput.rib = critbitgo.NewNet()
 	peerInput.mapNextHops = make(map[string][]net.IPNet)
 
 	// Create a BGP session for the aggregated table output
-	peerOutput := configuration.Output
 	peerOutput.rib = critbitgo.NewNet()
 	peerOutput.mapNextHops = make(map[string][]net.IPNet)
 

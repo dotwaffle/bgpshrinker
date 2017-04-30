@@ -36,11 +36,14 @@ const (
 
 // Peer holds all the configuration for a BGP Neighbor.
 type Peer struct {
-	Host        net.IP                 // allow connections from IPv6, but at present we only support IPv4 Unicast AFI/SAFI
-	Port        uint16                 // this should default to 179
-	LocalASN    uint16                 // this is only used for comparing OPEN message ASNs
-	HoldTime    time.Duration          // truncated to seconds in the OPEN message
-	RouterID    uint32                 // must be unique, don't care what it is
+	// Configurable Settings
+	Host     net.IP        // allow connections from IPv6, but at present we only support IPv4 Unicast AFI/SAFI
+	Port     uint16        // this should default to 179
+	ASN      uint16        // this is only used for comparing OPEN message ASNs
+	HoldTime time.Duration // truncated to seconds in the OPEN message
+	RouterID uint32        // must be unique, don't care what it is
+
+	// Only Significant To Program, Not Configurable
 	state       int                    // BGP FSM state, local significance only
 	updated     time.Time              // when the last update message was received, to prevent wasted effort later
 	rib         *critbitgo.Net         // radix tree, value is all BGP path attributes
@@ -117,7 +120,7 @@ func (peer *Peer) Dial() error {
 
 	// convert LocalASN (uint16) into Network Byte Order, and append to message
 	localASN := make([]byte, 2)
-	binary.BigEndian.PutUint16(localASN, peer.LocalASN)
+	binary.BigEndian.PutUint16(localASN, peer.ASN)
 	openMsg = append(openMsg, localASN...)
 
 	// convert HoldTime (uint16) into Network Byte Order, and append to message
@@ -189,7 +192,7 @@ func (peer *Peer) Dial() error {
 	// check the ASN is our local ASN (iBGP TTL = 1, so remote may need to be RR Client)
 	bufOpenASN := make([]byte, 2)
 	io.ReadFull(peer.conn, bufOpenASN)
-	if binary.BigEndian.Uint16(bufOpenASN) != peer.LocalASN {
+	if binary.BigEndian.Uint16(bufOpenASN) != peer.ASN {
 		log.Printf("BAD ASN! %v", binary.BigEndian.Uint16(bufOpenASN))
 		peer.sendMsg(bgpTypeNOTIFICATION, []byte{2, 2})
 		peer.state = bgpStateIDLE
@@ -592,7 +595,7 @@ func (peer Peer) Announce(prefix net.IPNet, nextHop net.IP) error {
 
 	// AS_PATH
 	localASN := make([]byte, 2)
-	binary.BigEndian.PutUint16(localASN, uint16(peer.LocalASN))
+	binary.BigEndian.PutUint16(localASN, uint16(peer.ASN))
 	msg = append(msg, []byte{1 << 6}...) // well-known, transitive, complete, short
 	msg = append(msg, []byte{2}...)      // AS_PATH
 	msg = append(msg, []byte{0}...)      // AS_PATH: Length (empty as iBGP and no AS_PATH so far)
